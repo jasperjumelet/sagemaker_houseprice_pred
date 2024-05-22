@@ -8,12 +8,13 @@ import pickle as pkl
 
 import pandas as pd
 import xgboost as xgb
-
-import pandas as pd
-import xgboost as xgb
 from sagemaker_containers import entry_point
 from sagemaker_xgboost_containers import distributed
 from sagemaker_xgboost_container.data_utils import get_dmatrix
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def _xgb_train(params, dtrain, evals, num_boost_round, model_dir, is_master):
     """Run xgb train on arguments given with rabit initialized.
@@ -25,23 +26,20 @@ def _xgb_train(params, dtrain, evals, num_boost_round, model_dir, is_master):
                         or is running single node training job.
                         Note that rabit_run will include this argument.
     """
-    logging.basicConfig(level=logging.DEBUG)
-
-    booster = xgb.train(params=params, dtrain=dtrain, evals=evals, num_boost_round_num_boost_round)
+    logger.info("Starting training...")
+    booster = xgb.train(params=params, dtrain=dtrain, evals=evals, num_boost_round=num_boost_round)
+    logger.info("Training completed.")
 
     if is_master:
-        model_location = model_dir + "/xgboost-model"
+        model_location = os.path.join(model_dir, "xgboost-model")
         pkl.dump(booster, open(model_location, "wb"))
-        logging.info("Stored trained model at {}".format(model_location))
+        logger.info("Stored trained model at {}".format(model_location))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # Hyperparameters are described here.
-    parser.add_argument(
-        "--max_depth",
-        type=int,
-    )
+    parser.add_argument("--max_depth", type=int)
     parser.add_argument("--eta", type=float)
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--min_child_weight", type=float)
@@ -52,7 +50,7 @@ if __name__ == "__main__":
     parser.add_argument("--tree_method", type=str, default="auto")
     parser.add_argument("--predictor", type=str, default="auto")
 
-    # Sagemaker specific arguments. Defaults are set in the environment variables.
+    # SageMaker specific arguments. Defaults are set in the environment variables.
     parser.add_argument("--output_data_dir", type=str, default=os.environ.get("SM_OUTPUT_DATA_DIR"))
     parser.add_argument("--model_dir", type=str, default=os.environ.get("SM_MODEL_DIR"))
     parser.add_argument("--train", type=str, default=os.environ.get("SM_CHANNEL_TRAIN"))
@@ -67,10 +65,10 @@ if __name__ == "__main__":
     sm_current_cost = args.sm_current_host
 
     dtrain = get_dmatrix(args.train, "csv")
+    logger.info("Training data loaded from {}".format(args.train))
     dval = get_dmatrix(args.validation, "csv")
-    watchlist = (
-        [(dtrain, "train"), (dval, "validation")] if dval is not None else[(dtrain, "train")]
-    )
+    logger.info("Validation data loaded from {}".format(args.validation))
+    watchlist = [(dtrain, "train"), (dval, "validation")] if dval is not None else [(dtrain, "train")]
 
     train_hp = {
         "max_depth": args.max_depth,
@@ -93,7 +91,7 @@ if __name__ == "__main__":
     )
 
     if len(sm_hosts) > 1:
-        # Wait untill all hosts are able to find each other
+        # Wait until all hosts are able to find each other
         entry_point._wait_hostname_resultion()
 
         # Execute training function after initializing rabit.
@@ -106,7 +104,7 @@ if __name__ == "__main__":
             update_rabit_args=True,
         )
     else:
-        # If singe node training, call training method directly.
+        # If single node training, call training method directly.
         if dtrain:
             xgb_train_args["is_master"] = True
             _xgb_train(**xgb_train_args)
@@ -118,7 +116,6 @@ def model_fn(model_dir):
 
     Note that this should have the same name as the serialized model in the _xgb_train method
     """
-    model_file = "xgboost-model"
-    booster = pkl.load(open(os.path.join(model_dir, model_file), "rb"))
+    model_file = os.path.join(model_dir, "xgboost-model")
+    booster = pkl.load(open(model_file, "rb"))
     return booster
-    
